@@ -1,0 +1,79 @@
+name: AdSprint Google Drive Upload Test
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  render-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Prepare Remotion
+        run: |
+          npx remotion browser ensure
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Render test MP4
+        run: |
+          mkdir -p out
+          npm run render:test
+          test -s out/basic-test.mp4
+      - name: Check Google Drive credentials
+        env:
+          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: |
+          if [ -z "$GDRIVE_SERVICE_ACCOUNT_JSON" ] || [ -z "$GDRIVE_FOLDER_ID" ]; then
+            echo "::error::Add Actions secrets GDRIVE_SERVICE_ACCOUNT_JSON and GDRIVE_FOLDER_ID."
+            exit 1
+          fi
+      - name: Upload MP4 to Google Drive
+        env:
+          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: |
+          python3 -m pip install --quiet google-api-python-client google-auth
+          printf '%s' "$GDRIVE_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/gdrive-service-account.json"
+          python3 <<'PY'
+          import os
+          from google.oauth2 import service_account
+          from googleapiclient.discovery import build
+          from googleapiclient.http import MediaFileUpload
+
+          credentials = service_account.Credentials.from_service_account_file(
+              os.environ["RUNNER_TEMP"] + "/gdrive-service-account.json",
+              scopes=["https://www.googleapis.com/auth/drive"]
+          )
+          drive = build("drive", "v3", credentials=credentials, cache_discovery=False)
+          metadata = {
+              "name": "adsprint-drive-test-" + os.environ["GITHUB_RUN_NUMBER"] + ".mp4",
+              "parents": [os.environ["GDRIVE_FOLDER_ID"]],
+              "mimeType": "video/mp4"
+          }
+          media = MediaFileUpload("out/basic-test.mp4", mimetype="video/mp4", resumable=True)
+          uploaded = drive.files().create(
+              body=metadata, media_body=media, fields="id,name,mimeType,size,webViewLink"
+          ).execute()
+          link = uploaded.get("webViewLink") or "https://drive.google.com/file/d/" + uploaded["id"] + "/view"
+          print("Uploaded:", uploaded["name"])
+          print("Drive link:", link)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("## Google Drive upload test: SUCCESS\n\n")
+              summary.write("- File: " + uploaded["name"] + "\n")
+              summary.write("- Size: " + str(uploaded.get("size", "unknown")) + " bytes\n")
+              summary.write("- [Open in Google Drive](" + link + ")\n")
+          PY
+          rm -f "$RUNNER_TEMP/gdrive-service-account.json"
+      - name: Keep GitHub artifact copy
+        uses: actions/upload-artifact@v4
+        with:
+          name: adsprint-drive-test
+          path: out/basic-test.mp4
+          if-no-files-found: error
+          retention-days: 3
