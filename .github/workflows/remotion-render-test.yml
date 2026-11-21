@@ -1,0 +1,95 @@
+name: Remotion Cloud Render Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    name: Render sample video on GitHub-hosted Ubuntu
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install project dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Prepare Remotion browser and media tools
+        run: |
+          npx remotion browser ensure
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Render video and measure render time
+        id: render
+        shell: bash
+        run: |
+          mkdir -p out
+          START=$(date +%s.%N)
+          npm run render:test
+          END=$(date +%s.%N)
+          RENDER_SECONDS=$(python3 -c "print(round(float('$END') - float('$START'), 2))")
+          echo "render_seconds=$RENDER_SECONDS" >> "$GITHUB_OUTPUT"
+          echo "Render command time: $RENDER_SECONDS seconds"
+
+      - name: Inspect rendered video and create report
+        env:
+          RENDER_SECONDS: ${{ steps.render.outputs.render_seconds }}
+        run: |
+          ffprobe -v error -select_streams v:0 \
+            -show_entries stream=codec_name,width,height,r_frame_rate,pix_fmt \
+            -show_entries format=duration,size,bit_rate \
+            -of json out/basic-test.mp4 > out/probe.json
+
+          python3 <<'PY'
+          import json
+          from fractions import Fraction
+          from pathlib import Path
+
+          probe = json.loads(Path("out/probe.json").read_text())
+          stream = probe["streams"][0]
+          fmt = probe["format"]
+          fps = float(Fraction(stream["r_frame_rate"]))
+          duration = float(fmt["duration"])
+          size_mb = int(fmt["size"]) / (1024 * 1024)
+          bitrate_mbps = int(fmt.get("bit_rate", 0)) / 1_000_000
+
+          report = f"""# AdSprint Remotion Render Test
+
+          - Render time (render command only): **{__import__('os').environ['RENDER_SECONDS']} seconds**
+          - Video duration: **{duration:.2f} seconds**
+          - Resolution: **{stream['width']} × {stream['height']} (720p)**
+          - Frame rate: **{fps:g} FPS**
+          - Video codec: **{stream['codec_name'].upper()}**
+          - Pixel format: **{stream.get('pix_fmt', 'not reported')}**
+          - Encoding quality setting: **H.264, CRF 18**
+          - File size: **{size_mb:.2f} MB**
+          - Average overall bitrate: **{bitrate_mbps:.2f} Mbps**
+          - Runner: **GitHub-hosted ubuntu-latest**
+          
+          Render time excludes dependency installation, browser setup, and runner startup.
+          """
+          Path("out/render-report.md").write_text(report)
+          print(report)
+          with open(__import__('os').environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(report)
+          PY
+
+      - name: Upload MP4 and render report
+        uses: actions/upload-artifact@v4
+        with:
+          name: adsprint-remotion-test-${{ github.run_number }}
+          path: |
+            out/basic-test.mp4
+            out/render-report.md
+          if-no-files-found: error
+          retention-days: 7
