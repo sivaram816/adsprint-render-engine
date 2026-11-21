@@ -2,6 +2,12 @@ name: Remotion Cloud Render Test
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "package.json"
+      - ".github/workflows/remotion-render-test.yml"
 
 permissions:
   contents: read
@@ -52,6 +58,8 @@ jobs:
 
           python3 <<'PY'
           import json
+          import os
+          import textwrap
           from fractions import Fraction
           from pathlib import Path
 
@@ -63,9 +71,10 @@ jobs:
           size_mb = int(fmt["size"]) / (1024 * 1024)
           bitrate_mbps = int(fmt.get("bit_rate", 0)) / 1_000_000
 
-          report = f"""# AdSprint Remotion Render Test
+          report = textwrap.dedent(f"""\
+          # AdSprint Remotion Render Test
 
-          - Render time (render command only): **{__import__('os').environ['RENDER_SECONDS']} seconds**
+          - Render time (render command only): **{os.environ['RENDER_SECONDS']} seconds**
           - Video duration: **{duration:.2f} seconds**
           - Resolution: **{stream['width']} × {stream['height']} (720p)**
           - Frame rate: **{fps:g} FPS**
@@ -75,12 +84,12 @@ jobs:
           - File size: **{size_mb:.2f} MB**
           - Average overall bitrate: **{bitrate_mbps:.2f} Mbps**
           - Runner: **GitHub-hosted ubuntu-latest**
-          
+
           Render time excludes dependency installation, browser setup, and runner startup.
-          """
+          """)
           Path("out/render-report.md").write_text(report)
           print(report)
-          with open(__import__('os').environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
               summary.write(report)
           PY
 
