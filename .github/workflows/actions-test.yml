@@ -1,0 +1,29 @@
+name: Actions Test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-runner:
+    name: Test Ubuntu runner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Show runner information
+        run: |
+          echo "GitHub Actions is working!"
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Branch: $GITHUB_REF_NAME"
+          echo "Runner OS: $RUNNER_OS"
+          echo "UTC time: $(date -u)"
+      - name: Verify basic tools
+        run: |
+          git --version
+          node --version
+          npm --version
